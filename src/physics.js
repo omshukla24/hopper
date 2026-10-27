@@ -11,9 +11,9 @@ export const MAX_RUN_SPEED = 10;
 export const RUN_FRICTION = 0.985; // speed kept per frame on the ground while holding a direction
 export const STOP_FRICTION = 0.8; // speed kept per frame on the ground with no direction held
 export const JUMP_SPEED = 14;
-export const COYOTE_FRAMES = 4;
+export const COYOTE_FRAMES = 6;
 export const JUMP_BUFFER_FRAMES = 5;
-export const TERMINAL_SPEED = 18;
+export const TERMINAL_SPEED = 22;
 export const PLAYER_HALF = 0.4;
 export const PLAYER_HEIGHT = 1.6;
 export const COIN_RADIUS = 0.6;
@@ -99,23 +99,14 @@ function respawn(state, level) {
   return { ...createState(level), coins: state.coins, deaths: state.deaths + 1 };
 }
 
-/** Advance one frame (state at time `frame` -> state at `frame + 1`). */
-export function step(state, input, level, frame) {
-  const move = readInput(input);
-  const boxes = level.platforms.map((p) => ({ id: p.id, box: boxAt(p, frame + 1) }));
-  const pos = rideAlong(state, level, frame);
-
-  // a jump press stays queued for a few frames, so tapping slightly early still counts
-  const pressed = move.jump && !state.jumpHeld;
-  let buffer = pressed ? JUMP_BUFFER_FRAMES : Math.max(0, state.buffer - 1);
-  // coyote time: after walking off a ledge you can still jump for a few frames
-  const canJump = state.airFrames <= COYOTE_FRAMES;
-  const jumping = buffer > 0 && canJump;
-  if (jumping) buffer = 0;
-
-  // sideways: accelerate toward the stick, ground friction eats the rest
+/**
+ * Velocity and collision for one frame: everything between "what did the player
+ * press" and "where did they end up". Moves `pos` in place, it is the caller's copy.
+ */
+function integrate(state, pos, move, jumping, boxes) {
+  // sideways: accelerate toward the stick, friction eats the rest
   const accel = (state.grounded ? RUN_ACCEL : RUN_ACCEL * AIR_CONTROL) * DT;
-  const friction = (held) => (state.grounded ? (held ? RUN_FRICTION : STOP_FRICTION) : 1);
+  const friction = (held) => (held ? RUN_FRICTION : STOP_FRICTION);
   const vel = [
     (state.vel[0] + move.x * accel) * friction(move.x !== 0),
     Math.max(state.vel[1] - GRAVITY * DT, -TERMINAL_SPEED),
@@ -132,7 +123,25 @@ export function step(state, input, level, frame) {
   moveAxis(pos, vel, 0, boxes);
   moveAxis(pos, vel, 2, boxes);
   const floor = moveAxis(pos, vel, 1, boxes);
-  const landed = floor !== null && floor.dir < 0;
+  return { vel, floor: floor !== null && floor.dir < 0 ? floor : null };
+}
+
+/** Advance one frame (state at time `frame` -> state at `frame + 1`). */
+export function step(state, input, level, frame) {
+  const move = readInput(input);
+  const boxes = level.platforms.map((p) => ({ id: p.id, box: boxAt(p, frame + 1) }));
+  const pos = rideAlong(state, level, frame);
+
+  // a jump press stays queued for a few frames, so tapping slightly early still counts
+  const pressed = move.jump && !state.jumpHeld;
+  let buffer = pressed ? JUMP_BUFFER_FRAMES : Math.max(0, state.buffer - 1);
+  // coyote time: after walking off a ledge you can still jump for a few frames
+  const canJump = state.airFrames <= COYOTE_FRAMES;
+  const jumping = buffer > 0 && canJump;
+  if (jumping) buffer = 0;
+
+  const { vel, floor } = integrate(state, pos, move, jumping, boxes);
+  const landed = floor !== null;
 
   const coins = [...state.coins];
   level.coins.forEach((coin, i) => {
